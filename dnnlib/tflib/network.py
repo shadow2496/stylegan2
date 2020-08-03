@@ -430,7 +430,7 @@ class Network:
 
         # Run minibatches.
         in_expr, out_expr = self._run_cache[key]
-        out_arrays = [np.empty([num_items] + expr.shape.as_list()[1:], expr.dtype.name) for expr in out_expr]
+        out_arrays = []
 
         for mb_begin in range(0, num_items, minibatch_size):
             if print_progress:
@@ -440,6 +440,8 @@ class Network:
             mb_num = mb_end - mb_begin
             mb_in = [src[mb_begin : mb_end] if src is not None else np.zeros([mb_num] + shape[1:]) for src, shape in zip(in_arrays, self.input_shapes)]
             mb_out = tf.get_default_session().run(out_expr, dict(zip(in_expr, mb_in)))
+            if len(out_arrays) == 0:
+                out_arrays = [np.empty([num_items] + list(src.shape[1:]), expr.dtype.name) for src, expr in zip(mb_out, out_expr)]
 
             for dst, src in zip(out_arrays, mb_out):
                 dst[mb_begin: mb_end] = src
