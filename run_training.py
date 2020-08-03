@@ -33,7 +33,47 @@ _valid_configs = [
 
 #----------------------------------------------------------------------------
 
-def run(dataset, data_dir, result_dir, config_id, num_gpus, total_kimg, gamma, mirror_augment, metrics):
+def run_auto(dataset, data_dir, result_dir, config_id, num_gpus, resolution, total_kimg, gamma, mirror_augment, metrics, train_auto):
+    train     = EasyDict(run_func_name='training.training_loop.training_auto_loop') # Options for training loop.
+    Enc       = EasyDict(func_name='training.networks_stylegan2.Encoder')           # Options for encoder network.
+    Dec       = EasyDict(func_name='training.networks_stylegan2.Decoder')           # Options for decoder network.
+    opt       = EasyDict(beta1=0.0, beta2=0.99, epsilon=1e-8)                       # Options for autoencoder optimizer.
+    loss      = EasyDict(func_name='training.loss.auto_l1')                         # Options for autoencoder loss.
+    sched     = EasyDict()                                                          # Options for TrainingSchedule.
+    grid      = EasyDict(size='1080p', layout='random')                             # Options for setup_snapshot_image_grid().
+    sc        = dnnlib.SubmitConfig()                                               # Options for dnnlib.submit_run().
+    tf_config = {'rnd.np_random_seed': 1000}                                        # Options for tflib.init_tf().
+
+    train.data_dir = data_dir
+    train.total_kimg = total_kimg
+    train.image_snapshot_ticks = 10
+    train.network_snapshot_ticks = 125
+    sched.lrate = 0.003
+    sched.minibatch_size = 64
+    sched.minibatch_gpu = 64
+    desc = 'stylegan2-hrae'
+
+    desc += '-' + dataset
+    dataset_args = EasyDict(tfrecord_dir=dataset)
+    dataset_args.resolution = resolution
+    dataset_args.num_threads = 4
+
+    assert num_gpus in [1, 2, 4, 8]
+    sc.num_gpus = num_gpus
+    desc += '-%dgpu' % num_gpus
+    desc += '-auto'
+
+    sc.submit_target = dnnlib.SubmitTarget.LOCAL
+    sc.local.do_not_copy_source_files = True
+    kwargs = EasyDict(train)
+    kwargs.update(Enc_args=Enc, Dec_args=Dec, opt_args=opt, loss_args=loss)
+    kwargs.update(dataset_args=dataset_args, sched_args=sched, grid_args=grid, tf_config=tf_config)
+    kwargs.submit_config = copy.deepcopy(sc)
+    kwargs.submit_config.run_dir_root = result_dir
+    kwargs.submit_config.run_desc = desc
+    dnnlib.submit_run(**kwargs)
+
+def run(dataset, data_dir, result_dir, config_id, num_gpus, resolution, total_kimg, gamma, mirror_augment, metrics, train_auto):
     train     = EasyDict(run_func_name='training.training_loop.training_loop') # Options for training loop.
     G         = EasyDict(func_name='training.networks_stylegan2.G_main')       # Options for generator network.
     D         = EasyDict(func_name='training.networks_stylegan2.D_stylegan2')  # Options for discriminator network.
@@ -59,6 +99,8 @@ def run(dataset, data_dir, result_dir, config_id, num_gpus, total_kimg, gamma, m
 
     desc += '-' + dataset
     dataset_args = EasyDict(tfrecord_dir=dataset)
+    dataset_args.resolution = resolution
+    dataset_args.num_threads = 4
 
     assert num_gpus in [1, 2, 4, 8]
     sc.num_gpus = num_gpus
@@ -164,10 +206,12 @@ def main():
     parser.add_argument('--dataset', help='Training dataset', required=True)
     parser.add_argument('--config', help='Training config (default: %(default)s)', default='config-f', required=True, dest='config_id', metavar='CONFIG')
     parser.add_argument('--num-gpus', help='Number of GPUs (default: %(default)s)', default=1, type=int, metavar='N')
+    parser.add_argument('--resolution', help='Dataset resolution', default=1024, type=int)
     parser.add_argument('--total-kimg', help='Training length in thousands of images (default: %(default)s)', metavar='KIMG', default=25000, type=int)
     parser.add_argument('--gamma', help='R1 regularization weight (default is config dependent)', default=None, type=float)
     parser.add_argument('--mirror-augment', help='Mirror augment (default: %(default)s)', default=False, metavar='BOOL', type=_str_to_bool)
     parser.add_argument('--metrics', help='Comma-separated list of metrics or "none" (default: %(default)s)', default='fid50k', type=_parse_comma_sep)
+    parser.add_argument('--train-auto', help='Train autoencoder', default=False, metavar='BOOL', type=_str_to_bool)
 
     args = parser.parse_args()
 
@@ -184,7 +228,10 @@ def main():
             print ('Error: unknown metric \'%s\'' % metric)
             sys.exit(1)
 
-    run(**vars(args))
+    if args.train_auto:
+        run_auto(**vars(args))
+    else:
+        run(**vars(args))
 
 #----------------------------------------------------------------------------
 
