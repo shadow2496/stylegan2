@@ -72,14 +72,18 @@ def apply_bias_act(x, act='linear', alpha=None, gain=None, lrmul=1, bias_var='bi
 
 def naive_upsample_2d(x, factor=2):
     with tf.variable_scope('NaiveUpsample'):
-        _N, C, H, W = x.shape.as_list()
+        _N, C, _, _ = x.shape.as_list()
+        H = tf.shape(x)[2]
+        W = tf.shape(x)[3]
         x = tf.reshape(x, [-1, C, H, 1, W, 1])
         x = tf.tile(x, [1, 1, 1, factor, 1, factor])
         return tf.reshape(x, [-1, C, H * factor, W * factor])
 
 def naive_downsample_2d(x, factor=2):
     with tf.variable_scope('NaiveDownsample'):
-        _N, C, H, W = x.shape.as_list()
+        _N, C, _, _ = x.shape.as_list()
+        H = tf.shape(x)[2]
+        W = tf.shape(x)[3]
         x = tf.reshape(x, [-1, C, H // factor, factor, W // factor, factor])
         return tf.reduce_mean(x, axis=[3,5])
 
@@ -693,5 +697,98 @@ def D_stylegan2(
     assert scores_out.dtype == tf.as_dtype(dtype)
     scores_out = tf.identity(scores_out, name='scores_out')
     return scores_out
+
+#----------------------------------------------------------------------------
+
+def Encoder(
+    images_in,
+    resolution      = 128,
+    in_channels     = 3,
+    out_channels    = 16,
+    ngf             = 64,
+    nonlinearity    = 'lrelu',
+    dtype           = 'float32',
+    resample_kernel = [1,3,3,1],
+    **_kwargs):
+
+    act = nonlinearity
+
+    images_in.set_shape([None, in_channels, None, None])
+    images_in = tf.cast(images_in, dtype)
+
+    def block(x, fmaps):
+        with tf.variable_scope('Conv0'):
+            x = apply_bias_act(conv2d_layer(x, fmaps=x.shape[1].value, kernel=3), act=act)
+        with tf.variable_scope('Conv1'):
+            x = apply_bias_act(conv2d_layer(x, fmaps=fmaps, kernel=3), act=act)
+        # with tf.variable_scope('Downsample'):
+        #     x = tf.nn.avg_pool2d(x, ksize=[1,1,2,2], data_format='NCHW', strides=[1,1,2,2], padding='SAME')
+        x = naive_downsample_2d(x)
+        # with tf.variable_scope('Conv1_down'):
+        #     x = apply_bias_act(conv2d_layer(x, fmaps=fmaps, kernel=3, down=True, resample_kernel=resample_kernel), act=act)
+        return x
+
+    x = images_in
+    for i in range(2):
+        with tf.variable_scope('Block{}'.format(i)):
+            x = block(x, ngf * (i + 1))
+
+    with tf.variable_scope('Block2'):
+        with tf.variable_scope('Conv0'):
+            x = apply_bias_act(conv2d_layer(x, fmaps=ngf * 2, kernel=3), act=act)
+        with tf.variable_scope('Conv1'):
+            x = apply_bias_act(conv2d_layer(x, fmaps=ngf * 2, kernel=3), act=act)
+
+    with tf.variable_scope('Output'):
+        x = apply_bias_act(conv2d_layer(x, fmaps=out_channels, kernel=1), act='tanh')
+    codes_out = x
+
+    assert codes_out.dtype == tf.as_dtype(dtype)
+    codes_out = tf.identity(codes_out, name='codes_out')
+    return codes_out
+
+#----------------------------------------------------------------------------
+
+def Decoder(
+    codes_in,
+    resolution      = 32,
+    in_channels     = 16,
+    out_channels    = 3,
+    ngf             = 64,
+    nonlinearity    = 'lrelu',
+    dtype           = 'float32',
+    resample_kernel = [1,3,3,1],
+    **_kwargs):
+
+    act = nonlinearity
+
+    codes_in.set_shape([None, in_channels, None, None])
+    codes_in = tf.cast(codes_in, dtype)
+
+    def block(x, fmaps):
+        x = naive_upsample_2d(x)
+        with tf.variable_scope('Conv0'):
+            x = apply_bias_act(conv2d_layer(x, fmaps=fmaps, kernel=3), act=act)
+        # with tf.variable_scope('Conv0_up'):
+        #     x = apply_bias_act(conv2d_layer(x, fmaps=fmaps, kernel=3, up=True, resample_kernel=resample_kernel), act=act)
+        with tf.variable_scope('Conv1'):
+            x = apply_bias_act(conv2d_layer(x, fmaps=fmaps, kernel=3), act=act)
+        return x
+
+    x = codes_in
+    with tf.variable_scope('Input'):
+        x = apply_bias_act(conv2d_layer(x, fmaps=ngf * 2, kernel=1), act=act)
+
+    for i in range(2):
+        with tf.variable_scope('Block{}'.format(i)):
+            x = block(x, ngf * (2 - i))
+
+    with tf.variable_scope('Output'):
+        x = apply_bias_act(conv2d_layer(x, fmaps=out_channels, kernel=1), act='tanh')
+    images_out = x
+
+    assert images_out.dtype == tf.as_dtype(dtype)
+    images_out = tf.identity(images_out, name='images_out')
+    return images_out
 
 #----------------------------------------------------------------------------
