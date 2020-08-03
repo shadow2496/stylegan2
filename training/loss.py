@@ -195,3 +195,13 @@ def G_logistic_ns_pathreg(G, D, opt, training_set, minibatch_size, pl_minibatch_
     return loss, reg
 
 #----------------------------------------------------------------------------
+
+def auto_l1(Enc, Dec, opt, reals):
+    _ = opt
+    codes = Enc.get_output_for(reals)
+    fake_images_out = Dec.get_output_for(codes)
+    l1 = tf.reduce_mean(tf.abs(reals - fake_images_out), axis=[1, 2, 3])
+    l1 = autosummary('Loss/l1', l1)
+    loss = l1
+
+    return loss
