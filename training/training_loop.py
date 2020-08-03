@@ -300,6 +300,7 @@ def training_loop(
     network_snapshot_ticks  = 50,       # How often to save network snapshots? None = only save 'networks-final.pkl'.
     save_tf_graph           = False,    # Include full TensorFlow computation graph in the tfevents file?
     save_weight_histograms  = False,    # Include weight histograms in the tfevents file?
+    resume_auto_pkl         = None,     # Autoencoder network pickle
     resume_pkl              = None,     # Network pickle to resume training from, None = train from scratch.
     resume_kimg             = 0.0,      # Assumed training progress at the beginning. Affects reporting and training schedule.
     resume_time             = 0.0,      # Assumed wallclock time at the beginning. Affects reporting.
@@ -316,10 +317,11 @@ def training_loop(
 
     # Construct or load networks.
     with tf.device('/gpu:0'):
+        Enc, Dec = misc.load_pkl(resume_auto_pkl)
         if resume_pkl is None or resume_with_new_nets:
             print('Constructing networks...')
-            G = tflib.Network('G', num_channels=training_set.shape[0], resolution=training_set.shape[1], label_size=training_set.label_size, **G_args)
-            D = tflib.Network('D', num_channels=training_set.shape[0], resolution=training_set.shape[1], label_size=training_set.label_size, **D_args)
+            G = tflib.Network('G', num_channels=16, resolution=training_set.shape[1] // 4, label_size=training_set.label_size, **G_args)
+            D = tflib.Network('D', num_channels=16, resolution=training_set.shape[1] // 4, label_size=training_set.label_size, **D_args)
             Gs = G.clone('Gs')
         if resume_pkl is not None:
             print('Loading networks from "%s"...' % resume_pkl)
@@ -328,10 +330,12 @@ def training_loop(
             else: G = rG; D = rD; Gs = rGs
 
     # Print layers and generate initial image snapshot.
+    Enc.print_layers(); Dec.print_layers()
     G.print_layers(); D.print_layers()
     sched = training_schedule(cur_nimg=total_kimg*1000, training_set=training_set, **sched_args)
     grid_latents = np.random.randn(np.prod(grid_size), *G.input_shape[1:])
-    grid_fakes = Gs.run(grid_latents, grid_labels, is_validation=True, minibatch_size=sched.minibatch_gpu)
+    grid_codes = Gs.run(grid_latents, grid_labels, is_validation=True, minibatch_size=sched.minibatch_gpu)
+    grid_fakes = Dec.run(grid_codes, minibatch_size=sched.minibatch_gpu)
     misc.save_image_grid(grid_fakes, dnnlib.make_run_dir_path('fakes_init.png'), drange=drange_net, grid_size=grid_size)
 
     # Setup training inputs.
@@ -366,6 +370,7 @@ def training_loop(
         with tf.name_scope('GPU%d' % gpu), tf.device('/gpu:%d' % gpu):
 
             # Create GPU-specific shadow copies of G and D.
+            Enc_gpu = Enc if gpu == 0 else Enc.clone(Enc.name + '_shadow')
             G_gpu = G if gpu == 0 else G.clone(G.name + '_shadow')
             D_gpu = D if gpu == 0 else D.clone(D.name + '_shadow')
 
@@ -391,7 +396,7 @@ def training_loop(
                 with tf.name_scope('G_loss'):
                     G_loss, G_reg = dnnlib.util.call_func_by_name(G=G_gpu, D=D_gpu, opt=G_opt, training_set=training_set, minibatch_size=minibatch_gpu_in, **G_loss_args)
                 with tf.name_scope('D_loss'):
-                    D_loss, D_reg = dnnlib.util.call_func_by_name(G=G_gpu, D=D_gpu, opt=D_opt, training_set=training_set, minibatch_size=minibatch_gpu_in, reals=reals_read, labels=labels_read, **D_loss_args)
+                    D_loss, D_reg = dnnlib.util.call_func_by_name(Enc=Enc_gpu, G=G_gpu, D=D_gpu, opt=D_opt, training_set=training_set, minibatch_size=minibatch_gpu_in, reals=reals_read, labels=labels_read, **D_loss_args)
 
             # Register gradients.
             if not lazy_regularization:
@@ -505,7 +510,8 @@ def training_loop(
 
             # Save snapshots.
             if image_snapshot_ticks is not None and (cur_tick % image_snapshot_ticks == 0 or done):
-                grid_fakes = Gs.run(grid_latents, grid_labels, is_validation=True, minibatch_size=sched.minibatch_gpu)
+                grid_codes = Gs.run(grid_latents, grid_labels, is_validation=True, minibatch_size=sched.minibatch_gpu)
+                grid_fakes = Dec.run(grid_codes, minibatch_size=sched.minibatch_gpu)
                 misc.save_image_grid(grid_fakes, dnnlib.make_run_dir_path('fakes%06d.png' % (cur_nimg // 1000)), drange=drange_net, grid_size=grid_size)
             if network_snapshot_ticks is not None and (cur_tick % network_snapshot_ticks == 0 or done):
                 pkl = dnnlib.make_run_dir_path('network-snapshot-%06d.pkl' % (cur_nimg // 1000))

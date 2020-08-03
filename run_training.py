@@ -91,15 +91,17 @@ def run(dataset, data_dir, result_dir, config_id, num_gpus, resolution, total_ki
     train.mirror_augment = mirror_augment
     train.image_snapshot_ticks = 10
     train.network_snapshot_ticks = 125
+    train.resume_auto_pkl = None  # ex) './results/00010-stylegan2-hrae-ffhq-1gpu-auto/network-final.pkl'
     # train.resume_pkl = None
     # train.resume_kimg = 0.0
     # train.resume_time = 0.0
     sched.G_lrate_base = sched.D_lrate_base = 0.002
     sched.minibatch_size_base = 32
-    sched.minibatch_gpu_base = 4
+    sched.minibatch_gpu_base = 8
     D_loss.gamma = 10
     metrics = [metric_defaults[x] for x in metrics]
-    desc = 'stylegan2'
+    metrics[0].auto_pkl = train.resume_auto_pkl
+    desc = 'stylegan2-hrae'
 
     desc += '-' + dataset
     dataset_args = EasyDict(tfrecord_dir=dataset)
